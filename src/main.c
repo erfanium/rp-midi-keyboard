@@ -1,78 +1,91 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#include "hardware/gpio.h"
-#include "pico/stdlib.h"
+#include "bsp/board.h"
+#include "keyboard.c"
+#include "sustain.c"
+#include "tusb.h"
 
-#define INPUT_PINS 8   // 0-7
-#define OUTPUT_PINS 4  // 8-11
-#define ROWS 10
+// #define LIB_TINYUSB_DEVICE = 1
+#define KEY_SCAN_INTERVAL 2 << 5
 
-const uint8_t row_pin_state[ROWS] = {12, 2, 10, 6, 14, 1, 9, 5, 13, 3};
-
-void init_gpio_pins() {
-  for (int pin = 0; pin < INPUT_PINS; pin++) {
-    gpio_init(pin);
-    gpio_set_dir(pin, GPIO_IN);
-    gpio_pull_up(pin);
-  }
-
-  for (int pin = INPUT_PINS; pin < INPUT_PINS + OUTPUT_PINS; pin++) {
-    gpio_init(pin);
-    gpio_set_dir(pin, GPIO_OUT);
-  }
-
-  // gpio_put(8, 1);
-  // gpio_put(9, 1);
-  // gpio_put(10, 0);
-  // gpio_put(11, 0);
-  // gpio_put(12, 0);
-}
-
-void set_row(uint8_t row) {
-  // for (int pin = 0; pin < OUTPUT_PINS; pin++) {
-  // gpio_put(INPUT_PINS + pin, (row_pin_state[row] & (1 << pin)) != 0);
-  // }
-  gpio_put_all(row_pin_state[row] << INPUT_PINS);
-}
-
-uint8_t read_input_pins() { return gpio_get_all() & ((1 << INPUT_PINS) - 1); }
+void init_gpio_pins() { init_keys_gpio_pin(); }
 
 int main() {
-  stdio_init_all();
+  board_init();
+  tud_init(0);
+
+  if (board_init_after_tusb) {
+    board_init_after_tusb();
+  }
+
   init_gpio_pins();
 
-  printf("Hello, world!\n");
-  sleep_ms(1000);
-  printf("Hello, world!\n");
-  sleep_ms(1000);
-  printf("Hello, world!\n");
-  sleep_ms(1000);
-  printf("Hello, world!\n");
+  stdio_usb_init();
 
-  uint8_t current_row = 0;  // min=0, max=31
-  uint8_t rows_state[ROWS] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  struct key_ctx_t key_ctx = init_key_ctx();
+  select_row(key_ctx.cr);
 
   while (true) {
-    uint8_t current_gpio_states = read_input_pins();
-    uint8_t changed_pins = current_gpio_states ^ rows_state[current_row];
-
-    if (changed_pins) {
-      for (int pin = 0; pin < INPUT_PINS; pin++) {
-        if (changed_pins & (1 << pin)) {
-          bool current_state = (current_gpio_states & (1 << pin)) != 0;
-          printf("Pin %d: current_state: %d, current_row: %d\n", pin,
-                 current_state, current_row);
-        }
-      }
-      rows_state[current_row] = current_gpio_states;
-    }
-
-    current_row = (current_row + 1) % ROWS;
-    set_row(current_row);
-    sleep_ms(1);
+    tud_task();
+    midi_task();
+    scan_keys_task(&key_ctx);
   }
 
   return 0;
 }
 
-// used states: 12, 2, 10, 6, 14, 1, 9, 5, 13, 3
+void scan_keys_task(struct key_ctx_t *key_ctx) {
+  static uint32_t start_d = 0;
+  if (start_d < KEY_SCAN_INTERVAL) {
+    start_d += 1;
+    return;
+  };  // not enough time
+  start_d = 0;
+
+  uint8_t current = read_columns();
+  // printf("current_row_state: %d\n", current);
+  uint8_t changed_pins = current ^ key_ctx->rows[key_ctx->cr];
+
+  if (changed_pins) {
+    // printf("current_row_id: %d\n", key_ctx->cr);
+    // printf("changed_pins: %d\n", changed_pins);
+    for (int pin = 0; pin < INPUT_PINS; pin += 1) {  // Change from `<=` to `<`
+      if (changed_pins & (1 << pin)) {
+        bool current_state = (current & (1 << pin)) != 0;
+        int key_id = ((key_ctx->cr * 8) + pin) / 2;
+        bool is_sustain = (pin % 2) == 0;
+
+        if (current_state) {
+          kbd_off(key_id, is_sustain);
+        } else {
+          kbd_on(key_id, is_sustain);
+        }
+      }
+    }
+  }
+
+  key_ctx->rows[key_ctx->cr] = current;
+
+  key_ctx->cr = (key_ctx->cr + 1) % ROWS;
+  select_row(key_ctx->cr);
+}
+
+// midi task
+
+// Variable that holds the current position in the sequence.
+uint32_t note_pos = 0;
+
+void midi_task(void) {
+  static uint32_t start_ms = 0;
+
+  uint8_t const cable_num = 0;  // MIDI jack associated with USB endpoint
+  uint8_t const channel = 0;    // 0 for channel 1
+
+  // The MIDI interface always creates input and output port/jack descriptors
+  // regardless of these being used or not. Therefore incoming traffic should be
+  // read (possibly just discarded) to avoid the sender blocking in IO
+  uint8_t packet[4];
+  while (tud_midi_available()) tud_midi_packet_read(packet);
+}
