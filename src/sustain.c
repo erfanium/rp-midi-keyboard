@@ -10,6 +10,7 @@
 typedef struct {
   uint32_t a_time;
   uint32_t b_time;
+  bool is_on;
 } KeyState;
 
 static KeyState keys[MAX_KEYS];
@@ -32,56 +33,57 @@ void midi_key_off(int key_id) {
 // Function to calculate velocity based on time difference (mock function, can
 // be adjusted)
 int calculate_velocity(uint32_t time_diff) {
-  printf("calculate_velocity: %d\n", time_diff);
   int velocity =
-      127 - (time_diff);  // Assuming 127 max velocity, scale down with time
+      127 - (time_diff * 2);  // Assuming 127 max velocity, scale down with time
   if (velocity < 16) velocity = 16;  // Clamp to a minimum value
   return velocity;
 }
 
-void kbd_on(int key_id, bool is_a) {
+void kbd_start_on(int key_id) {
+  printf("kbd_start_on: %d\n", key_id);
+
   uint32_t current_time = board_millis();
   KeyState *key = &keys[key_id];
-  bool should_flush = false;
+  key->a_time = current_time;
 
-  // is it a new A press?
-  if (is_a && !key->a_time) {
-    key->a_time = current_time;
-    should_flush = true;
-  }
-
-  if (!is_a && !key->b_time) {
-    key->b_time = current_time;
-    should_flush = true;
-  }
-
-  if (should_flush && key->a_time && key->b_time) {
+  if (key->b_time && !key->is_on) {
     uint32_t diff = abs_diff(key->a_time, key->b_time);
     midi_key_on(key_id, calculate_velocity(diff));
+    key->is_on = 1;
   }
-
-  // log
-  printf("kbd_on: key_id: %d, is_a: %d\n", key_id, is_a);
 }
 
-// MIDI button off handler
-void kbd_off(int key_id, bool is_a) {
+void kbd_end_on(int key_id) {
+  printf("kbd_end_on: %d\n", key_id);
+  uint32_t current_time = board_millis();
   KeyState *key = &keys[key_id];
-  bool should_flush = false;
+  key->b_time = current_time;
 
-  if (is_a && key->a_time) {
-    key->a_time = 0;
-    should_flush = true;
+  if (key->a_time && !key->is_on) {
+    uint32_t diff = abs_diff(key->a_time, key->b_time);
+    midi_key_on(key_id, calculate_velocity(diff));
+    key->is_on = 1;
   }
+}
 
-  if (!is_a && key->b_time) {
-    key->b_time = 0;
-    should_flush = true;
-  }
+void kbd_end_off(int key_id) {
+  printf("kbd_end_off: %d\n", key_id);
+  KeyState *key = &keys[key_id];
 
-  if (should_flush && !key->a_time && !key->b_time) {
+  key->b_time = 0;
+  if (!key->a_time) {
     midi_key_off(key_id);
+    key->is_on = 0;
   }
+}
 
-  printf("kbd_off: key_id: %d, is_a: %d\n", key_id, is_a);
+void kbd_start_off(int key_id) {
+  printf("kbd_start_off: %d\n", key_id);
+
+  KeyState *key = &keys[key_id];
+  key->a_time = 0;
+  if (!key->b_time) {
+    midi_key_off(key_id);
+    key->is_on = 0;
+  }
 }
