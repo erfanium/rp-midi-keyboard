@@ -4,6 +4,7 @@
 
 #include "bsp/board.h"
 #include "keyboard.c"
+#include "octave.c"
 #include "sustain.c"
 #include "tusb.h"
 
@@ -12,23 +13,19 @@
 
 int scans = 0;
 
-// Helper function to read debounced column state
-uint8_t debounced_read_columns(void) {
-  uint8_t debounced = 0xFF;  // Start with all bits high
-  for (int i = 0; i < DEBOUNCE_SAMPLES; i++) {
-    uint8_t sample = read_columns();
-    debounced &= sample;  // Bitwise AND to keep only stable high bits
-    sleep_us(DEBOUNCE_DELAY_US);
-  }
-  return debounced;
-}
+// uint8_t debounced_read_columns(void) {
+//   uint8_t debounced = 0xFF;  // Start with all bits high
+//   for (int i = 0; i < DEBOUNCE_SAMPLES; i++) {
+//     uint8_t sample = read_columns();
+//     debounced &= sample;  // Bitwise AND to keep only stable high bits
+//     sleep_us(DEBOUNCE_DELAY_US);
+//   }
+//   return debounced;
+// }
 
-void init_gpio_pins() { init_keys_gpio_pin(); }
-
-bool timer_callback(struct repeating_timer *t) {
-  printf("Stats: %d scans per second\n", scans);
-  scans = 0;
-  return true;  // Returning true keeps the timer running
+void init_gpio_pins() {
+  init_keys_gpio_pin();
+  octave_init_gpio_pins();
 }
 
 int main() {
@@ -46,20 +43,20 @@ int main() {
   select_row(key_ctx.cr);
 
   // struct repeating_timer timer;
-  // add_repeating_timer_us(-1000000, timer_callback, NULL, &timer);
+  // add_repeating_timer_us(-1000000, octave_debug, NULL, &timer);
 
   while (true) {
     tud_task();
     midi_task();
     scan_keys_task(&key_ctx);
+    octave_gpio_scan();
   }
 
   return 0;
 }
 
 void scan_keys_task(struct key_ctx_t *key_ctx) {
-  // Instead of reading once, take multiple samples to debounce the input
-  uint8_t current = debounced_read_columns();
+  uint8_t current = read_columns();
   uint8_t cr = key_ctx->cr;
   uint8_t changed_pins = current ^ key_ctx->rows[cr];
 
